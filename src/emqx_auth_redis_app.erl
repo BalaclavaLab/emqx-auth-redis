@@ -58,6 +58,7 @@ load_acl_hook(AclCmd) ->
 
 if_cmd_enabled(Par, Fun) ->
     case application:get_env(?APP, Par) of
+        {ok, "undefined"} -> ok;
         {ok, Cmd} -> Fun(Cmd);
         undefined -> ok
     end.

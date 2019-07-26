@@ -17,60 +17,69 @@
 -include_lib("emqx/include/emqx.hrl").
 -include_lib("emqx/include/logger.hrl").
 
--export([ register_metrics/0
-        , check/2
-        , description/0
-        ]).
+-export([register_metrics/0
+  , check/2
+  , description/0
+]).
 
 register_metrics() ->
-    [emqx_metrics:new(MetricName) || MetricName <- ['auth.redis.success', 'auth.redis.failure', 'auth.redis.ignore']].
+  [emqx_metrics:new(MetricName) || MetricName <- ['auth.redis.success', 'auth.redis.failure', 'auth.redis.ignore']].
 
-check(Credentials = #{password := Password}, #{auth_cmd  := AuthCmd,
-                                               super_cmd := SuperCmd,
-                                               hash_type := HashType,
-                                               timeout   := Timeout}) ->
-    CheckPass = case emqx_auth_redis_cli:q(AuthCmd, Credentials, Timeout) of
-                    {ok, PassHash} when is_binary(PassHash) ->
-                        check_pass({PassHash, Password}, HashType);
-                    {ok, [undefined|_]} ->
-                        {error, not_found};
-                    {ok, [PassHash]} ->
-                        check_pass({PassHash, Password}, HashType);
-                    {ok, [PassHash, Salt|_]} ->
-                        check_pass({PassHash, Salt, Password}, HashType);
-                    {error, Reason} ->
-                        ?LOG(error, "[Redis] Command: ~p failed: ~p", [AuthCmd, Reason]),
-                        {error, not_found}
-                end,
-    case CheckPass of
-        ok ->
-            emqx_metrics:inc('auth.redis.success'),
-            {stop, Credentials#{is_superuser => is_superuser(SuperCmd, Credentials, Timeout),
-                                anonymous => false,
-                                auth_result => success}};
-        {error, not_found} ->
-            emqx_metrics:inc('auth.redis.ignore'), ok;
-        {error, ResultCode} ->
-            ?LOG(error, "[Redis] Auth from redis failed: ~p", [ResultCode]),
-            emqx_metrics:inc('auth.redis.failure'),
-            {stop, Credentials#{auth_result => ResultCode, anonymous => false}}
-    end.
+check(Credentials = #{username := Username, client_id := ClientId, password := Password}, #{auth_cmd  := AuthCmd, super_cmd := SuperCmd, hash_type := HashType, timeout := Timeout}) ->
+  CheckPass = case check_client_id(Username, ClientId) of
+                {ok, PassHash} when is_binary(PassHash) ->
+                  check_pass({PassHash, Password}, HashType);
+                {ok, [undefined | _]} ->
+                  {error, not_found};
+                {ok, [PassHash]} ->
+                  check_pass({PassHash, Password}, HashType);
+                {ok, [PassHash, Salt | _]} ->
+                  check_pass({PassHash, Salt, Password}, HashType);
+                {error, Reason} ->
+                  ?LOG(error, "[Redis] Command: ~p failed: ~p", [AuthCmd, Reason]),
+                  {error, not_found}
+              end,
+  case CheckPass of
+    ok ->
+      emqx_metrics:inc('auth.redis.success'),
+      {stop, Credentials#{is_superuser => is_superuser(SuperCmd, Credentials, Timeout),
+        anonymous => false,
+        auth_result => success}};
+    {error, ResultCode} ->
+      ?LOG(error, "[Redis] Auth from redis failed: ~p", [ResultCode]),
+      emqx_metrics:inc('auth.redis.failure'),
+      {stop, Credentials#{auth_result => ResultCode, anonymous => false}}
+  end.
 
 description() -> "Authentication with Redis".
 
 -spec(is_superuser(undefined | list(), emqx_types:credentials(), timeout()) -> true | false).
 is_superuser(undefined, _Credentials, _Timeout) -> false;
 is_superuser(SuperCmd, Credentials, Timeout) ->
-    case emqx_auth_redis_cli:q(SuperCmd, Credentials, Timeout) of
-        {ok, undefined} -> false;
-        {ok, <<"1">>}   -> true;
-        {ok, _Other}    -> false;
-        {error, _Error} -> false
-    end.
+  case emqx_auth_redis_cli:q(SuperCmd, Credentials, Timeout) of
+    {ok, undefined} -> false;
+    {ok, <<"1">>} -> true;
+    {ok, _Other} -> false;
+    {error, _Error} -> false
+  end.
 
 check_pass(Password, HashType) ->
-    case emqx_passwd:check_pass(Password, HashType) of
-        ok -> ok;
-        {error, _Reason} -> {error, not_authorized}
-    end.
+  case emqx_passwd:check_pass(Password, HashType) of
+    ok -> ok;
+    {error, _Reason} -> {error, not_authorized}
+  end.
 
+% We expect ClientId to be in format username_someid to prevent ClientId abuse
+check_client_id(Username, ClientId) ->
+  case byte_size(ClientId) =< byte_size(Username) + 1 of
+    true ->
+      {error, "Bad client id"};
+    false ->
+      ExpectedScope = {0, byte_size(Username) + 1},
+      case binary:match(ClientId, <<Username/binary, "_">>, [{scope, ExpectedScope}]) of
+        ExpectedScope ->
+          ok;
+        _Rest ->
+          {error, "Bad client id"}
+      end
+  end.
