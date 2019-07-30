@@ -27,17 +27,22 @@ register_metrics() ->
 
 check(Credentials = #{username := Username, client_id := ClientId, password := Password}, #{auth_cmd  := AuthCmd, super_cmd := SuperCmd, hash_type := HashType, timeout := Timeout}) ->
   CheckPass = case check_client_id(Username, ClientId) of
-                {ok, PassHash} when is_binary(PassHash) ->
-                  check_pass({PassHash, Password}, HashType);
-                {ok, [undefined | _]} ->
-                  {error, not_found};
-                {ok, [PassHash]} ->
-                  check_pass({PassHash, Password}, HashType);
-                {ok, [PassHash, Salt | _]} ->
-                  check_pass({PassHash, Salt, Password}, HashType);
-                {error, Reason} ->
-                  ?LOG(error, "[Redis] Command: ~p failed: ~p", [AuthCmd, Reason]),
-                  {error, not_found}
+                ok -> case emqx_auth_redis_cli:q(AuthCmd, Credentials, Timeout) of
+                        {ok, PassHash} when is_binary(PassHash) ->
+                          check_pass({PassHash, Password}, HashType);
+                        {ok, [undefined | _]} ->
+                          {error, not_found};
+                        {ok, undefined} ->
+                          {error, not_found};
+                        {ok, [PassHash]} ->
+                          check_pass({PassHash, Password}, HashType);
+                        {ok, [PassHash, Salt | _]} ->
+                          check_pass({PassHash, Salt, Password}, HashType);
+                        {error, Reason} ->
+                          ?LOG(error, "[Redis] Command: ~p failed: ~p", [AuthCmd, Reason]),
+                          {error, not_found}
+                      end;
+                _Error -> _Error
               end,
   case CheckPass of
     ok ->
