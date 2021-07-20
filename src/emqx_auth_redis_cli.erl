@@ -78,6 +78,8 @@ replvar(Cmd, Credentials = #{clientid := ClientId}) ->
     replvar(repl(Cmd, "%c", ClientId), maps:remove(clientid, Credentials));
 replvar(Cmd, Credentials = #{username := Username}) ->
     replvar(repl(Cmd, "%u", Username), maps:remove(username, Credentials));
+replvar(Cmd, Credentials = #{password := Password}) ->
+  replvar(repl(Cmd, "%p", Password), maps:remove(password, Credentials));
 replvar(Cmd, _) ->
     Cmd.
 
